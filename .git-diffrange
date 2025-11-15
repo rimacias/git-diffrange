@@ -323,26 +323,44 @@ fzf_file() {
 # Busca el último commit ANTES de la fecha dada (cualquier autor)
 find_commit_any() {
   local date_val="$1"
-  git log --before="$date_val" -n1 --format="%H"
+  local commit
+  commit=$(git log --before="$date_val" -n1 --format="%H" 2>/dev/null)
+  if [[ -z "$commit" ]]; then
+    git hash-object -t tree /dev/null # Empty tree
+  else
+    echo "$commit"
+  fi
 }
 
 # Busca el último commit ANTES de la fecha dada filtrando por autor (case-insensitive)
 find_commit_author() {
   local date_val="$1"
+  local commit
   if [[ -z "$AUTHOR" ]]; then
-    git log --before="$date_val" -n1 --format="%H"
+    commit=$(git log --before="$date_val" -n1 --format="%H" 2>/dev/null)
   else
-    git log --before="$date_val" --regexp-ignore-case --author="$AUTHOR" -n1 --format="%H"
+    commit=$(git log --before="$date_val" --regexp-ignore-case --author="$AUTHOR" -n1 --format="%H" 2>/dev/null)
+  fi
+  if [[ -z "$commit" ]]; then
+    git hash-object -t tree /dev/null # Empty tree
+  else
+    echo "$commit"
   fi
 }
 
 # Backward-compat shim (deprecated): mantener nombre original si se usa en algún lugar no actualizado
 find_commit() {
   local date_val="$1"
+  local commit
   if [[ -n "$AUTHOR" ]]; then
-    git log --before="$date_val" --regexp-ignore-case --author="$AUTHOR" -n1 --format="%H"
+    commit=$(git log --before="$date_val" --regexp-ignore-case --author="$AUTHOR" -n1 --format="%H" 2>/dev/null)
   else
-    git log --before="$date_val" -n1 --format="%H"
+    commit=$(git log --before="$date_val" -n1 --format="%H" 2>/dev/null)
+  fi
+  if [[ -z "$commit" ]]; then
+    git hash-object -t tree /dev/null # Empty tree
+  else
+    echo "$commit"
   fi
 }
 
@@ -351,11 +369,17 @@ find_commit() {
 # ------------------------
 case "$RANGE" in
   cw|current-week)
-    FROM=$(find_commit_any "$(date -v -monday +%Y-%m-%d)")
+    # Para semana actual: desde el lunes de esta semana (inclusive) hasta ahora
+    # Buscar el último commit antes del lunes (que será el punto de partida)
+    MONDAY_DATE=$(date -v -monday +%Y-%m-%d)
+    FROM=$(find_commit_any "$MONDAY_DATE")
     TO="" ;;
   lw|last-week)
-    FROM=$(find_commit_any "$(date -v -monday -v-1w +%Y-%m-%d)")
-    TO=$(find_commit_any "$(date -v -sunday +%Y-%m-%d)") ;;
+    # Para semana pasada: desde el lunes pasado hasta el domingo pasado
+    LAST_MONDAY=$(date -v -monday -v-1w +%Y-%m-%d)
+    LAST_SUNDAY=$(date -v -sunday -v-1w +%Y-%m-%d)
+    FROM=$(find_commit_any "$LAST_MONDAY")
+    TO=$(find_commit_any "$LAST_SUNDAY") ;;
   *)
     FROM=$(find_commit_any "$RANGE")
     if [[ -n "$RANGE2" ]]; then
@@ -414,9 +438,10 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
 
   # Obtener commits del rango; usar separador ASCII US (0x1f) para campos
   SEP=$'\x1f'
-  RANGE_END_REF=${TO:-HEAD}
   LOG_PRETTY="%ad${SEP}%h${SEP}%H${SEP}%an${SEP}%ae${SEP}%s"
-  LOG_ARGS=("$FROM..$RANGE_END_REF" "--date=short" "--pretty=format:${LOG_PRETTY}" "--reverse")
+
+  # Usar filtrado por fecha (--since/--until) para obtener commits en el rango
+  LOG_ARGS=("--since=$START_DATE_RAW 00:00:00" "--until=$END_DATE_RAW 23:59:59" "--date=short" "--pretty=format:${LOG_PRETTY}" "--reverse")
   if [[ -n "$AUTHOR" ]]; then LOG_ARGS+=("--regexp-ignore-case" "--author=$AUTHOR"); fi
   COMMITS_RAW=$(git log "${LOG_ARGS[@]}")
 
@@ -424,7 +449,6 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
   FILTERED_COMMITS=""
   while IFS=$'\x1f' read -r day shortH longH authorN authorE subject || [[ -n "$day" ]]; do
     [[ -z "$day" ]] && continue
-    if [[ "$day" < "$START_DATE_RAW" || "$day" > "$END_DATE_RAW" ]]; then continue; fi
     FILTERED_COMMITS+="$day$SEP$shortH$SEP$longH$SEP$authorN$SEP$authorE$SEP$subject\n"
   done <<< "$COMMITS_RAW"
 
