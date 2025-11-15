@@ -39,12 +39,35 @@ cd git-diffrange
 2. Make it executable and add to your PATH:
 ```bash
 chmod +x .git-diffrange
-# Option 1: Symlink to a directory in your PATH
-ln -s "$(pwd)/.git-diffrange" /usr/local/bin/git-diffrange
 
-# Option 2: Or use git's custom command feature
+# Option 1: Symlink to /usr/local/bin (recommended)
 ln -s "$(pwd)/.git-diffrange" /usr/local/bin/git-diffrange
-# Now you can use: git diffrange
+git diffrange -h
+
+# Option 2: Add to PATH via shell configuration
+echo "export PATH=\"\$PATH:$(pwd)\"" >> ~/.zshrc
+source ~/.zshrc
+git-diffrange -h
+
+# Option 3: Copy to a directory already in PATH
+cp .git-diffrange /usr/local/bin/git-diffrange
+
+# Option 4: Create git alias (best for git integration)
+# First, copy or symlink the script to your home directory
+cp .git-diffrange ~/.git-diffrange
+
+# Then add the alias to your git config:
+git config --global alias.diffrange '!~/.git-diffrange'
+
+# Now you can use it as: git diffrange -h
+```
+
+**Tip:** Option 4 with git alias is recommended because it allows seamless `git diffrange` command integration without modifying your PATH.
+
+**Manual setup:** If you prefer to manually edit `~/.gitconfig`, see `.gitconfig-example` in this repo or add:
+```
+[alias]
+    diffrange = "!~/.git-diffrange"
 ```
 
 ## Quick Start

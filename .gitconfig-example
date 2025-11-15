@@ -1,0 +1,19 @@
+# Example git config alias for git-diffrange
+#
+# Add this section to your ~/.gitconfig file to enable the git alias:
+#
+# Option 1: Automatic (from command line)
+#   git config --global alias.diffrange '!~/.git-diffrange'
+#
+# Option 2: Manual (edit ~/.gitconfig directly)
+#   Add the following lines to the end of your ~/.gitconfig:
+
+[alias]
+    diffrange = "!~/.git-diffrange"
+
+# After adding, you can use:
+#   git diffrange -h
+#   git diffrange -cw
+#   git diffrange -lw -ds
+#   git diffrange -cw -a john --ds-format '%s (%h) — %an'
+
