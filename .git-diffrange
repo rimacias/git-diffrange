@@ -3,28 +3,200 @@
 # Añadimos variables para patch diario
 PATCH_FLAG=0
 OUTPUT_NAME="report"
+# Formato custom para daily summary (opcional)
+DS_FORMAT=""
 
 # ------------------------
 #     HELP
 # ------------------------
 show_help() {
-  echo "Uso: git diffrange [opciones]"
-  echo ""
-  echo "Rangos predefinidos:";
-  echo "  -cw | --current-week     Cambios desde el lunes → estado actual"
-  echo "  -lw | --last-week        Cambios entre lunes pasado → domingo pasado"
-  echo ""
-  echo "Rangos personalizados:";
-  echo "  <fecha> [<fecha>]        Ej: 2023-01-01 2023-12-31"
-  echo ""
-  echo "Opciones:";
-  echo "  -a | --author <name>     Filtra commits por autor"
-  echo "  -ds | --daily-summary    Muestra un resumen diario de commits"
-  echo "  -p  | --patch            Genera diff normal (o parches diarios si va con -ds)"
-  echo "  -n  | --name <label>     Nombre para archivos de parches diarios (default: report)"
-  echo "  --stat                   Solo estadísticas del diff"
-  echo "  --name-only              Solo nombres de archivos"
-  echo "  -i                       Modo interactivo (incompatible con -ds)"
+  cat << 'EOF'
+git-diffrange - Git diff wrapper with date ranges and daily summaries
+
+USAGE
+  git diffrange [options] [date] [date]
+
+PREDEFINED RANGES
+  -cw, --current-week       Changes from this Monday → now
+  -lw, --last-week          Changes from last Monday → last Sunday
+
+CUSTOM DATE RANGES
+  <date>                    From date to now
+  <date> [<date>]           From first date to second date (if there's one)
+                            Format: YYYY-MM-DD
+                            Example: git diffrange 2024-01-01 2024-12-31
+
+OPTIONS
+  -a, --author <name>       Filter commits by author (case-insensitive)
+                            Matches both name and email
+
+DAILY SUMMARY MODE
+  -ds                       Enable daily summary (groups commits by day)
+  -ds=format{...}           Daily summary with inline format
+  --daily-summary           Same as -ds (long form)
+  --daily-summary=format{...}
+                            Daily summary with inline format (long form)
+  --ds-format '<format>'    Custom format for commit lines
+                            Tokens: %h %H %s %an %ae %ad %n
+                            Example: --ds-format ' • %s (%h) — %an'
+
+PATCH OPTIONS
+  -p, --patch               Generate patches
+                            • Without -ds: normal diff output
+                            • With -ds: per-day .patch files
+  -n, --name <label>        Name prefix for daily patch files
+                            Default: "report"
+
+OUTPUT OPTIONS
+  --stat                    Show only statistics (files changed, +/-)
+  --name-only               Show only names of changed files
+
+INTERACTIVE MODE
+  -i                        Browse commits/files with fzf
+                            Note: Incompatible with -ds
+
+HELP
+  -h, --help                Show this help
+  -fh, --formatter-help     Show detailed formatter documentation
+
+EXAMPLES
+  # Current week changes
+  git diffrange -cw
+
+  # Last week with daily summary
+  git diffrange -lw -ds
+
+  # Custom format for specific author
+  git diffrange -cw -a john --ds-format '%s (%h) — %an'
+
+  # Generate daily patches
+  git diffrange -lw -ds -p -n "sprint-23"
+
+  # Custom date range with stats
+  git diffrange 2024-01-01 2024-12-31 --stat
+
+For detailed formatting help: git diffrange -fh
+EOF
+  exit 0
+}
+
+show_formatter_help() {
+  cat << 'EOF'
+═══════════════════════════════════════════════════════════════════════════════
+                         FORMATTER HELP - git diffrange
+═══════════════════════════════════════════════════════════════════════════════
+
+HOW TO PASS CUSTOM FORMATS
+───────────────────────────────────────────────────────────────────────────────
+You can provide a custom per-commit line format in three equivalent ways:
+
+  1. Inline with -ds (short):
+     -ds=format{...}
+
+  2. Inline with --daily-summary (long):
+     --daily-summary=format{...}
+
+  3. With a dedicated flag (best for spaces/special chars):
+     --ds-format '...'
+
+IMPORTANT QUOTING NOTE (zsh/macOS)
+───────────────────────────────────────────────────────────────────────────────
+If your format contains spaces or special characters, quote it.
+With brace expansion in zsh, prefer quotes when using -ds=format{...}.
+
+Safe patterns:
+  -ds='format{%h %s}'
+  --daily-summary='format{[%ad] %an: %s}'
+  --ds-format ' • %s (%h)'
+
+SUPPORTED TOKENS
+───────────────────────────────────────────────────────────────────────────────
+Within your format, you can use these tokens:
+
+  %h   short commit hash (e.g., e7f6a512)
+  %H   full commit hash (40 chars)
+  %s   subject line (single-line commit title)
+  %an  author name
+  %ae  author email
+  %ad  commit date (YYYY-MM-DD; daily summary groups by this)
+  %n   newline (inserts a real line break)
+
+Notes:
+  • Day headers (like 14/11/2025:) are printed separately above each day
+  • DS_FORMAT applies only to commit lines
+  • If DS_FORMAT is not set, the default is: "  • %s (%h)"
+  • Any %X unknown token remains unchanged (e.g., %x stays as "%x")
+  • If you want indentation or a bullet, include it in your format
+
+EXAMPLES
+───────────────────────────────────────────────────────────────────────────────
+Default-like but explicit:
+  --ds-format ' • %s (%h)'
+
+Minimal hash per line:
+  -ds='format{%H %n}'
+
+Subject with short hash and author:
+  --ds-format '%s (%h) — %an'
+
+Multi-line pretty:
+  --ds-format '%s%n by %an <%ae>%n %H'
+
+Date, subject, and email:
+  --ds-format '[%ad] %s — %ae'
+
+Just subjects (no bullet/indent):
+  --ds-format '%s'
+
+GOOD PATTERNS TO AVOID SHELL QUIRKS
+───────────────────────────────────────────────────────────────────────────────
+Prefer --ds-format when your format has spaces:
+  --ds-format '%s (%h)'
+
+If you use -ds=format{...}, quote it if it contains spaces:
+  -ds='format{%s (%h)}'
+
+BEHAVIOR DETAILS
+───────────────────────────────────────────────────────────────────────────────
+Grouping:
+  Commits are grouped by day and listed earliest → latest (ascending).
+  The header uses dd/mm/YYYY; the %ad token in your format is YYYY-MM-DD.
+
+Author filtering:
+  -a/--author uses case-insensitive matching (name or email).
+
+Patches:
+  If you also pass -p, per-day .patch files are generated.
+  DS_FORMAT affects only the printed summary, not the patch content.
+
+Safety:
+  We parse git log using an internal ASCII separator to avoid breaking
+  on special characters in subjects/names.
+
+EDGE CASES AND TIPS
+───────────────────────────────────────────────────────────────────────────────
+Literal percent signs:
+  Any % not followed by a known token is left as-is (e.g., %x).
+  If you need a literal string like "%h" and don't want it replaced,
+  change it slightly (e.g., "%{h}" or "% h").
+
+Newlines:
+  %n inserts a newline; if your format ends with %n, you'll get a blank
+  line after that commit's block—useful for multi-line layouts.
+
+QUICK TRY-IT COMMANDS
+───────────────────────────────────────────────────────────────────────────────
+Current week, minimal hashes only:
+  git diffrange -cw --ds-format '%H'
+
+Current week, tidy bullets:
+  git diffrange -cw --ds-format ' • %s (%h)'
+
+Last week, author-focused:
+  git diffrange -lw -a cando --ds-format '[%ad] %s — %an'
+
+═══════════════════════════════════════════════════════════════════════════════
+EOF
   exit 0
 }
 
@@ -39,16 +211,43 @@ RANGE2=""
 POSITIONALS=()
 DAILY_SUMMARY=0
 
+# Helper para extraer formato de -ds=...
+_extract_ds_format() {
+  local val="$1"
+  # soporta: format{...} o {...}
+  if [[ "$val" == format\{*\} ]]; then
+    DS_FORMAT="${val#format\{}"; DS_FORMAT="${DS_FORMAT%\}}"
+  elif [[ "$val" == \{*\} ]]; then
+    DS_FORMAT="${val#\{}"; DS_FORMAT="${DS_FORMAT%\}}"
+  else
+    DS_FORMAT="$val"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
       show_help ;;
+
+    -fh|--formatter-help)
+      show_formatter_help ;;
 
     -a|--author)
       AUTHOR="$2"; shift ;;
 
     -ds|--daily-summary)
       DAILY_SUMMARY=1 ;;
+
+    -ds=*)
+      DAILY_SUMMARY=1
+      _extract_ds_format "${1#*=}" ;;
+
+    --daily-summary=*)
+      DAILY_SUMMARY=1
+      _extract_ds_format "${1#*=}" ;;
+
+    --ds-format)
+      DS_FORMAT="$2"; shift ;;
 
     -n|--name)
       OUTPUT_NAME="$2"; shift ;;
@@ -119,12 +318,29 @@ fzf_file() {
 }
 
 # ------------------------
-#     FIND COMMIT
+#     FIND COMMIT HELPERS
 # ------------------------
+# Busca el último commit ANTES de la fecha dada (cualquier autor)
+find_commit_any() {
+  local date_val="$1"
+  git log --before="$date_val" -n1 --format="%H"
+}
+
+# Busca el último commit ANTES de la fecha dada filtrando por autor (case-insensitive)
+find_commit_author() {
+  local date_val="$1"
+  if [[ -z "$AUTHOR" ]]; then
+    git log --before="$date_val" -n1 --format="%H"
+  else
+    git log --before="$date_val" --regexp-ignore-case --author="$AUTHOR" -n1 --format="%H"
+  fi
+}
+
+# Backward-compat shim (deprecated): mantener nombre original si se usa en algún lugar no actualizado
 find_commit() {
   local date_val="$1"
   if [[ -n "$AUTHOR" ]]; then
-    git log --before="$date_val" --author="$AUTHOR" -n1 --format="%H"
+    git log --before="$date_val" --regexp-ignore-case --author="$AUTHOR" -n1 --format="%H"
   else
     git log --before="$date_val" -n1 --format="%H"
   fi
@@ -135,15 +351,15 @@ find_commit() {
 # ------------------------
 case "$RANGE" in
   cw|current-week)
-    FROM=$(find_commit "$(date -v -monday +%Y-%m-%d)")
+    FROM=$(find_commit_any "$(date -v -monday +%Y-%m-%d)")
     TO="" ;;
   lw|last-week)
-    FROM=$(find_commit "$(date -v -monday -v-1w +%Y-%m-%d)")
-    TO=$(find_commit "$(date -v -sunday +%Y-%m-%d)") ;;
+    FROM=$(find_commit_any "$(date -v -monday -v-1w +%Y-%m-%d)")
+    TO=$(find_commit_any "$(date -v -sunday +%Y-%m-%d)") ;;
   *)
-    FROM=$(find_commit "$RANGE")
+    FROM=$(find_commit_any "$RANGE")
     if [[ -n "$RANGE2" ]]; then
-      TO=$(find_commit "$RANGE2")
+      TO=$(find_commit_any "$RANGE2")
     else
       TO=""
     fi ;;
@@ -196,24 +412,23 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
   START_FMT=$(format_date "$START_DATE_RAW")
   END_FMT=$(format_date "$END_DATE_RAW")
 
-  # Obtener commits del rango
+  # Obtener commits del rango; usar separador ASCII US (0x1f) para campos
+  SEP=$'\x1f'
   RANGE_END_REF=${TO:-HEAD}
-  LOG_ARGS=("$FROM..$RANGE_END_REF" "--date=short" "--pretty=format:%ad|%h|%s" "--reverse")
-  if [[ -n "$AUTHOR" ]]; then LOG_ARGS+=("--author=$AUTHOR"); fi
-  COMMITS=$(git log "${LOG_ARGS[@]}")
+  LOG_PRETTY="%ad${SEP}%h${SEP}%H${SEP}%an${SEP}%ae${SEP}%s"
+  LOG_ARGS=("$FROM..$RANGE_END_REF" "--date=short" "--pretty=format:${LOG_PRETTY}" "--reverse")
+  if [[ -n "$AUTHOR" ]]; then LOG_ARGS+=("--regexp-ignore-case" "--author=$AUTHOR"); fi
+  COMMITS_RAW=$(git log "${LOG_ARGS[@]}")
 
-  # Filtrar commits y ordenar por fecha
+  # Filtrar commits por fecha y ordenar por día
   FILTERED_COMMITS=""
-  while IFS='|' read -r day hash subject; do
+  while IFS=$'\x1f' read -r day shortH longH authorN authorE subject || [[ -n "$day" ]]; do
     [[ -z "$day" ]] && continue
-    if [[ "$day" < "$START_DATE_RAW" || "$day" > "$END_DATE_RAW" ]]; then
-      continue
-    fi
-    FILTERED_COMMITS+="$day|$hash|$subject\n"
-  done <<< "$COMMITS"
+    if [[ "$day" < "$START_DATE_RAW" || "$day" > "$END_DATE_RAW" ]]; then continue; fi
+    FILTERED_COMMITS+="$day$SEP$shortH$SEP$longH$SEP$authorN$SEP$authorE$SEP$subject\n"
+  done <<< "$COMMITS_RAW"
 
-  # Ordenar commits por fecha (esto asegura que todos los commits de un día estén juntos)
-  COMMITS=$(printf "%b" "$FILTERED_COMMITS" | sort -t'|' -k1,1)
+  COMMITS=$(printf "%b" "$FILTERED_COMMITS" | LC_ALL=C sort -t"$SEP" -k1,1)
 
   if [[ -z "$COMMITS" ]]; then
     echo "(Sin commits en el rango)"; exit 0
@@ -221,27 +436,38 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
 
   echo "Weekly Report (${START_FMT} - ${END_FMT})"; echo ""
 
-  # Iterar sobre commits y agrupar por día
+  # Helper para renderizar línea custom
+  render_commit_line() {
+    local fmt="$1"; local day="$2" shortH="$3" longH="$4" an="$5" ae="$6" subject="$7"
+    local out="$fmt"
+    out="${out//%ad/$day}"; out="${out//%h/$shortH}"; out="${out//%H/$longH}"
+    out="${out//%an/$an}"; out="${out//%ae/$ae}"; out="${out//%s/$subject}"
+    # Reemplazar %n por salto de línea real
+    out=${out//%n/$'\n'}
+    printf "%s" "$out"
+  }
+
+  # Iterar y agrupar por día
   DAYS_ORDERED=()
   prev_day=""
-  while IFS='|' read -r day hash subject; do
+  while IFS=$'\x1f' read -r day shortH longH authorN authorE subject || [[ -n "$day" ]]; do
     [[ -z "$day" ]] && continue
-
-    # Si es un día nuevo, imprimir cabecera
     if [[ "$day" != "$prev_day" ]]; then
-      if [[ -n "$prev_day" ]]; then
-        echo ""  # Línea en blanco entre días
-      fi
-      day_fmt=$(format_date "$day")
-      echo "${day_fmt}:"
+      if [[ -n "$prev_day" ]]; then echo ""; fi
+      echo "$(format_date "$day"):"
       DAYS_ORDERED+=("$day")
       prev_day="$day"
     fi
 
-    # Imprimir commit
-    echo "  • $subject ($hash)"
+    if [[ -n "$DS_FORMAT" ]]; then
+      render_commit_line "$DS_FORMAT" "$day" "$shortH" "$longH" "$authorN" "$authorE" "$subject"
+      echo ""
+    else
+      echo "  • $subject ($shortH)"
+    fi
   done <<< "$COMMITS"
   echo ""
+
   if [[ $PATCH_FLAG -eq 1 ]]; then
     OUTPUT_DIR="diff_reports"; mkdir -p "$OUTPUT_DIR"
     echo "Generando parches diarios en $OUTPUT_DIR/ usando nombre '$OUTPUT_NAME'..." >&2
@@ -249,8 +475,8 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
     for day in "${DAYS_ORDERED[@]}"; do
       next_day=$(date -j -f "%Y-%m-%d" "$day" -v+1d +%Y-%m-%d 2>/dev/null || date -v+1d -j -f "%Y-%m-%d" "$day" +%Y-%m-%d 2>/dev/null)
 
-      # baseline_commit: último commit ANTES de ese día (inicio del día)
-      baseline_commit=$(find_commit "$day")
+      # baseline_commit: último commit ANTES de ese día (inicio del día) - sin filtrar por autor
+      baseline_commit=$(find_commit_any "$day")
 
       # Si el día es igual o mayor que END_DATE_RAW (es el último día del rango), usar HEAD
       if [[ "$day" == "$END_DATE_RAW" || "$day" > "$END_DATE_RAW" ]]; then
@@ -259,27 +485,21 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
         # Resolver HEAD a su hash real para comparación
         end_commit_hash=$(git rev-parse "$end_commit" 2>/dev/null)
 
-        # Si baseline es igual a HEAD (todos los commits de hoy ya están incluidos en baseline),
-        # necesitamos obtener el commit padre del primer commit del día
+        # Si baseline es igual a HEAD, obtener el parent del primer commit del día
         if [[ "$baseline_commit" == "$end_commit_hash" ]]; then
-          # Obtener el primer commit del día desde COMMITS
           first_commit_of_day=$(printf "%b" "$COMMITS" | grep "^$day|" | head -n1 | cut -d'|' -f2)
           if [[ -n "$first_commit_of_day" ]]; then
-            # Intentar obtener el commit padre
             parent_commit=$(git rev-parse "${first_commit_of_day}^" 2>/dev/null)
             if [[ -n "$parent_commit" ]]; then
               baseline_commit="$parent_commit"
             else
-              # Si no tiene padre (es el primer commit del repo), usar --root en el diff
-              # Marcar con un valor especial que manejaremos después
               baseline_commit="__ROOT__:${first_commit_of_day}"
             fi
           fi
         fi
       else
         # Para días intermedios, buscar el último commit antes del siguiente día
-        end_commit=$(find_commit "$next_day")
-        # Si no encuentra commit para el día siguiente, usar HEAD
+        end_commit=$(find_commit_any "$next_day")
         if [[ -z "$end_commit" || "$end_commit" == "$baseline_commit" ]]; then
           end_commit=$RANGE_END_REF
         fi
@@ -292,13 +512,9 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
       fname_date=$(format_date_filename "$day")
       patch_file="$OUTPUT_DIR/${fname_date}_${OUTPUT_NAME}.patch"
 
-      # Manejar el caso especial de primer commit del repo
       if [[ "$baseline_commit" == __ROOT__:* ]]; then
-        # Extraer el commit del marcador
         root_commit="${baseline_commit#__ROOT__:}"
-        # Usar git show para mostrar el primer commit completo
         git show "$root_commit" > "$patch_file"
-        # Si hay más commits ese día, agregar los diffs subsiguientes
         if [[ "$root_commit" != "$end_commit" ]]; then
           git diff "$root_commit" "$end_commit" -p >> "$patch_file"
         fi
