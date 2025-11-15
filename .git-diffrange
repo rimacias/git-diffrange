@@ -1,0 +1,340 @@
+#!/bin/bash
+
+# Añadimos variables para patch diario
+PATCH_FLAG=0
+OUTPUT_NAME="report"
+
+# ------------------------
+#     HELP
+# ------------------------
+show_help() {
+  echo "Uso: git diffrange [opciones]"
+  echo ""
+  echo "Rangos predefinidos:";
+  echo "  -cw | --current-week     Cambios desde el lunes → estado actual"
+  echo "  -lw | --last-week        Cambios entre lunes pasado → domingo pasado"
+  echo ""
+  echo "Rangos personalizados:";
+  echo "  <fecha> [<fecha>]        Ej: 2023-01-01 2023-12-31"
+  echo ""
+  echo "Opciones:";
+  echo "  -a | --author <name>     Filtra commits por autor"
+  echo "  -ds | --daily-summary    Muestra un resumen diario de commits"
+  echo "  -p  | --patch            Genera diff normal (o parches diarios si va con -ds)"
+  echo "  -n  | --name <label>     Nombre para archivos de parches diarios (default: report)"
+  echo "  --stat                   Solo estadísticas del diff"
+  echo "  --name-only              Solo nombres de archivos"
+  echo "  -i                       Modo interactivo (incompatible con -ds)"
+  exit 0
+}
+
+# ------------------------
+#    ARGUMENT PARSING
+# ------------------------
+AUTHOR=""
+DIFF_OPTS=()
+INTERACTIVE=0
+RANGE=""
+RANGE2=""
+POSITIONALS=()
+DAILY_SUMMARY=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      show_help ;;
+
+    -a|--author)
+      AUTHOR="$2"; shift ;;
+
+    -ds|--daily-summary)
+      DAILY_SUMMARY=1 ;;
+
+    -n|--name)
+      OUTPUT_NAME="$2"; shift ;;
+
+    --stat|--name-only)
+      DIFF_OPTS+=("$1") ;;
+
+    --patch|-p)
+      DIFF_OPTS+=("-p"); PATCH_FLAG=1 ;;
+
+    -i)
+      INTERACTIVE=1 ;;
+
+    -cw|--current-week)
+      RANGE="cw" ;;
+
+    -lw|--last-week)
+      RANGE="lw" ;;
+
+    *)
+      POSITIONALS+=("$1") ;;
+  esac
+  shift
+done
+
+set -- "${POSITIONALS[@]}"
+
+# If RANGE not set by flag, use positional arguments as custom date ranges
+if [[ -z "$RANGE" ]]; then
+  if [[ $# -eq 0 ]]; then
+    echo "Error: debes especificar un rango. Usa -h para ver la ayuda." >&2
+    exit 1
+  fi
+  RANGE="$1"
+  RANGE2="$2"
+fi
+
+# ------------------------
+#   VALIDACIÓN: incompatibilidades
+# ------------------------
+if [[ $INTERACTIVE -eq 1 && ${#DIFF_OPTS[@]} -gt 0 ]]; then
+  echo "Error: las opciones ${DIFF_OPTS[*]} no soportan modo interactivo (-i)" >&2
+  exit 1
+fi
+if [[ $INTERACTIVE -eq 1 && $DAILY_SUMMARY -eq 1 ]]; then
+  echo "Error: el modo resumen diario (-ds) no soporta modo interactivo (-i)" >&2
+  exit 1
+fi
+
+# ------------------------
+#   VALIDACIÓN: fzf instalado?
+# ------------------------
+if [[ $INTERACTIVE -eq 1 ]]; then
+  if ! command -v fzf >/dev/null 2>&1; then
+    echo "Error: fzf no está instalado. Para usar modo interactivo:"; echo "  brew install fzf"; exit 1
+  fi
+fi
+
+# ------------------------
+# Helpers fzf (solo modo interactivo)
+# ------------------------
+fzf_commit() {
+  git log --pretty=format:"%h %s" | fzf --preview "git show {1}" | awk '{print $1}'
+}
+
+fzf_file() {
+  git diff "$FROM" "$TO" --name-only | fzf
+}
+
+# ------------------------
+#     FIND COMMIT
+# ------------------------
+find_commit() {
+  local date_val="$1"
+  if [[ -n "$AUTHOR" ]]; then
+    git log --before="$date_val" --author="$AUTHOR" -n1 --format="%H"
+  else
+    git log --before="$date_val" -n1 --format="%H"
+  fi
+}
+
+# ------------------------
+#        RANGES
+# ------------------------
+case "$RANGE" in
+  cw|current-week)
+    FROM=$(find_commit "$(date -v -monday +%Y-%m-%d)")
+    TO="" ;;
+  lw|last-week)
+    FROM=$(find_commit "$(date -v -monday -v-1w +%Y-%m-%d)")
+    TO=$(find_commit "$(date -v -sunday +%Y-%m-%d)") ;;
+  *)
+    FROM=$(find_commit "$RANGE")
+    if [[ -n "$RANGE2" ]]; then
+      TO=$(find_commit "$RANGE2")
+    else
+      TO=""
+    fi ;;
+esac
+
+# ------------------------
+#  VALIDACIÓN DE COMMITS
+# ------------------------
+if [[ -z "$FROM" || "$FROM" == "" ]]; then
+  if [[ -n "$AUTHOR" ]]; then
+    echo "Error: no se encontró ningún commit del autor \"$AUTHOR\" para el rango \"$RANGE\"" >&2
+  else
+    echo "Error: no se encontró ningún commit para el rango \"$RANGE\"" >&2
+  fi
+  exit 1
+fi
+
+if [[ "$RANGE" == "lw" || "$RANGE" == "last-week" || -n "$RANGE2" ]]; then
+  if [[ -z "$TO" || "$TO" == "" ]]; then
+    if [[ -n "$AUTHOR" ]]; then
+      echo "Error: no se encontró commit final para el autor \"$AUTHOR\" en el rango \"$RANGE\" → \"$RANGE2\"" >&2
+    else
+      echo "Error: no se encontró commit final para el rango \"$RANGE\" → \"$RANGE2\"" >&2
+    fi
+    exit 1
+  fi
+fi
+
+# ------------------------
+#   DAILY SUMMARY MODE
+# ------------------------
+if [[ $DAILY_SUMMARY -eq 1 ]]; then
+  # Determinar fechas de cabecera
+  if [[ "$RANGE" == "cw" ]]; then
+    START_DATE_RAW=$(date -v -monday +%Y-%m-%d)
+    END_DATE_RAW=$(date +%Y-%m-%d)
+  elif [[ "$RANGE" == "lw" ]]; then
+    START_DATE_RAW=$(date -v -monday -v -1w +%Y-%m-%d)
+    END_DATE_RAW=$(date -v -sunday +%Y-%m-%d)
+  else
+    START_DATE_RAW="$RANGE"
+    if [[ -n "$RANGE2" ]]; then
+      END_DATE_RAW="$RANGE2"
+    else
+      END_DATE_RAW=$(date +%Y-%m-%d)
+    fi
+  fi
+  format_date() { local d="$1"; echo "${d:8:2}/${d:5:2}/${d:0:4}"; }
+  format_date_filename() { local d="$1"; echo "${d:8:2}-${d:5:2}-${d:0:4}"; }
+  START_FMT=$(format_date "$START_DATE_RAW")
+  END_FMT=$(format_date "$END_DATE_RAW")
+
+  # Obtener commits del rango
+  RANGE_END_REF=${TO:-HEAD}
+  LOG_ARGS=("$FROM..$RANGE_END_REF" "--date=short" "--pretty=format:%ad|%h|%s" "--reverse")
+  if [[ -n "$AUTHOR" ]]; then LOG_ARGS+=("--author=$AUTHOR"); fi
+  COMMITS=$(git log "${LOG_ARGS[@]}")
+
+  # Filtrar commits y ordenar por fecha
+  FILTERED_COMMITS=""
+  while IFS='|' read -r day hash subject; do
+    [[ -z "$day" ]] && continue
+    if [[ "$day" < "$START_DATE_RAW" || "$day" > "$END_DATE_RAW" ]]; then
+      continue
+    fi
+    FILTERED_COMMITS+="$day|$hash|$subject\n"
+  done <<< "$COMMITS"
+
+  # Ordenar commits por fecha (esto asegura que todos los commits de un día estén juntos)
+  COMMITS=$(printf "%b" "$FILTERED_COMMITS" | sort -t'|' -k1,1)
+
+  if [[ -z "$COMMITS" ]]; then
+    echo "(Sin commits en el rango)"; exit 0
+  fi
+
+  echo "Weekly Report (${START_FMT} - ${END_FMT})"; echo ""
+
+  # Iterar sobre commits y agrupar por día
+  DAYS_ORDERED=()
+  prev_day=""
+  while IFS='|' read -r day hash subject; do
+    [[ -z "$day" ]] && continue
+
+    # Si es un día nuevo, imprimir cabecera
+    if [[ "$day" != "$prev_day" ]]; then
+      if [[ -n "$prev_day" ]]; then
+        echo ""  # Línea en blanco entre días
+      fi
+      day_fmt=$(format_date "$day")
+      echo "${day_fmt}:"
+      DAYS_ORDERED+=("$day")
+      prev_day="$day"
+    fi
+
+    # Imprimir commit
+    echo "  • $subject ($hash)"
+  done <<< "$COMMITS"
+  echo ""
+  if [[ $PATCH_FLAG -eq 1 ]]; then
+    OUTPUT_DIR="diff_reports"; mkdir -p "$OUTPUT_DIR"
+    echo "Generando parches diarios en $OUTPUT_DIR/ usando nombre '$OUTPUT_NAME'..." >&2
+
+    for day in "${DAYS_ORDERED[@]}"; do
+      next_day=$(date -j -f "%Y-%m-%d" "$day" -v+1d +%Y-%m-%d 2>/dev/null || date -v+1d -j -f "%Y-%m-%d" "$day" +%Y-%m-%d 2>/dev/null)
+
+      # baseline_commit: último commit ANTES de ese día (inicio del día)
+      baseline_commit=$(find_commit "$day")
+
+      # Si el día es igual o mayor que END_DATE_RAW (es el último día del rango), usar HEAD
+      if [[ "$day" == "$END_DATE_RAW" || "$day" > "$END_DATE_RAW" ]]; then
+        end_commit=$RANGE_END_REF
+
+        # Resolver HEAD a su hash real para comparación
+        end_commit_hash=$(git rev-parse "$end_commit" 2>/dev/null)
+
+        # Si baseline es igual a HEAD (todos los commits de hoy ya están incluidos en baseline),
+        # necesitamos obtener el commit padre del primer commit del día
+        if [[ "$baseline_commit" == "$end_commit_hash" ]]; then
+          # Obtener el primer commit del día desde COMMITS
+          first_commit_of_day=$(printf "%b" "$COMMITS" | grep "^$day|" | head -n1 | cut -d'|' -f2)
+          if [[ -n "$first_commit_of_day" ]]; then
+            # Intentar obtener el commit padre
+            parent_commit=$(git rev-parse "${first_commit_of_day}^" 2>/dev/null)
+            if [[ -n "$parent_commit" ]]; then
+              baseline_commit="$parent_commit"
+            else
+              # Si no tiene padre (es el primer commit del repo), usar --root en el diff
+              # Marcar con un valor especial que manejaremos después
+              baseline_commit="__ROOT__:${first_commit_of_day}"
+            fi
+          fi
+        fi
+      else
+        # Para días intermedios, buscar el último commit antes del siguiente día
+        end_commit=$(find_commit "$next_day")
+        # Si no encuentra commit para el día siguiente, usar HEAD
+        if [[ -z "$end_commit" || "$end_commit" == "$baseline_commit" ]]; then
+          end_commit=$RANGE_END_REF
+        fi
+      fi
+
+      if [[ -z "$baseline_commit" || -z "$end_commit" || "$baseline_commit" == "$end_commit" ]]; then
+        continue
+      fi
+
+      fname_date=$(format_date_filename "$day")
+      patch_file="$OUTPUT_DIR/${fname_date}_${OUTPUT_NAME}.patch"
+
+      # Manejar el caso especial de primer commit del repo
+      if [[ "$baseline_commit" == __ROOT__:* ]]; then
+        # Extraer el commit del marcador
+        root_commit="${baseline_commit#__ROOT__:}"
+        # Usar git show para mostrar el primer commit completo
+        git show "$root_commit" > "$patch_file"
+        # Si hay más commits ese día, agregar los diffs subsiguientes
+        if [[ "$root_commit" != "$end_commit" ]]; then
+          git diff "$root_commit" "$end_commit" -p >> "$patch_file"
+        fi
+      else
+        git diff "$baseline_commit" "$end_commit" -p > "$patch_file"
+      fi
+
+      if [[ ! -s "$patch_file" ]]; then rm -f "$patch_file"; continue; fi
+      echo "  - $patch_file" >&2
+    done
+    echo "Parches generados." >&2
+  fi
+  exit 0
+fi
+
+# ------------------------
+#     INTERACTIVE MODE
+# ------------------------
+if [[ $INTERACTIVE -eq 1 ]]; then
+  echo "Selecciona commit inicial (FROM):"; FROM=$(fzf_commit)
+  echo "Selecciona commit final (TO):"; TO=$(fzf_commit)
+  echo "Selecciona archivo específico (o ‘Esc’ para todo el diff):"; FILE=$(fzf_file)
+  if [[ -n "$FILE" ]]; then
+    git diff "$FROM" "$TO" "$FILE"
+  else
+    git diff "$FROM" "$TO"
+  fi
+
+  exit 0
+fi
+
+# ------------------------
+#      NORMAL DIFF
+# ------------------------
+if [[ -n "$TO" ]]; then
+  git diff "$FROM" "$TO" "${DIFF_OPTS[@]}"
+else
+  git diff "$FROM" "${DIFF_OPTS[@]}"
+fi
