@@ -82,7 +82,7 @@ EOF
 
 show_formatter_help() {
   cat << 'EOF'
-═══════════════════════════════════════════════════════════════════════════════
+═════════════════════════════════════════════════════════════════════��═════════
                          FORMATTER HELP - git diffrange
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -422,7 +422,7 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
     END_DATE_RAW=$(date +%Y-%m-%d)
   elif [[ "$RANGE" == "lw" ]]; then
     START_DATE_RAW=$(date -v -monday -v -1w +%Y-%m-%d)
-    END_DATE_RAW=$(date -v -sunday +%Y-%m-%d)
+    END_DATE_RAW=$(date -v -sunday -v -1w +%Y-%m-%d)
   else
     START_DATE_RAW="$RANGE"
     if [[ -n "$RANGE2" ]]; then
@@ -438,17 +438,41 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
 
   # Obtener commits del rango; usar separador ASCII US (0x1f) para campos
   SEP=$'\x1f'
-  LOG_PRETTY="%ad${SEP}%h${SEP}%H${SEP}%an${SEP}%ae${SEP}%s"
+  RANGE_END_REF=${TO:-HEAD}
+  # Incluir también committer para filtros flexibles
+  LOG_PRETTY="%ad${SEP}%h${SEP}%H${SEP}%an${SEP}%ae${SEP}%cn${SEP}%ce${SEP}%s"
 
-  # Usar filtrado por fecha (--since/--until) para obtener commits en el rango
+  # Usar fechas (since/until) y luego filtrar por autor/committer de forma flexible
   LOG_ARGS=("--since=$START_DATE_RAW 00:00:00" "--until=$END_DATE_RAW 23:59:59" "--date=short" "--pretty=format:${LOG_PRETTY}" "--reverse")
-  if [[ -n "$AUTHOR" ]]; then LOG_ARGS+=("--regexp-ignore-case" "--author=$AUTHOR"); fi
   COMMITS_RAW=$(git log "${LOG_ARGS[@]}")
 
   # Filtrar commits por fecha y ordenar por día
   FILTERED_COMMITS=""
-  while IFS=$'\x1f' read -r day shortH longH authorN authorE subject || [[ -n "$day" ]]; do
+  while IFS=$'\x1f' read -r day shortH longH authorN authorE committerN committerE subject || [[ -n "$day" ]]; do
     [[ -z "$day" ]] && continue
+    # Filtrar por rango de fechas estrictamente
+    if [[ "$day" < "$START_DATE_RAW" || "$day" > "$END_DATE_RAW" ]]; then continue; fi
+
+    # Si hay filtro de autor, aplicar coincidencia flexible:
+    # - Subcadena (case-insensitive) en autor/committer (nombre o email)
+    # - Incluir commits con trailers Co-authored-by que contengan el patrón
+    if [[ -n "$AUTHOR" ]]; then
+      _pat=$(printf "%s" "$AUTHOR" | tr '[:upper:]' '[:lower:]')
+      _an=$(printf "%s" "$authorN" | tr '[:upper:]' '[:lower:]')
+      _ae=$(printf "%s" "$authorE" | tr '[:upper:]' '[:lower:]')
+      _cn=$(printf "%s" "$committerN" | tr '[:upper:]' '[:lower:]')
+      _ce=$(printf "%s" "$committerE" | tr '[:upper:]' '[:lower:]')
+      _include=0
+      if [[ "$_an" == *"$_pat"* || "$_ae" == *"$_pat"* || "$_cn" == *"$_pat"* || "$_ce" == *"$_pat"* ]]; then
+        _include=1
+      else
+        if git show -s --format=%b "$longH" | grep -i -F "co-authored-by" | grep -i -F -q "$AUTHOR"; then
+          _include=1
+        fi
+      fi
+      [[ $_include -eq 0 ]] && continue
+    fi
+
     FILTERED_COMMITS+="$day$SEP$shortH$SEP$longH$SEP$authorN$SEP$authorE$SEP$subject\n"
   done <<< "$COMMITS_RAW"
 
@@ -499,6 +523,35 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
     for day in "${DAYS_ORDERED[@]}"; do
       next_day=$(date -j -f "%Y-%m-%d" "$day" -v+1d +%Y-%m-%d 2>/dev/null || date -v+1d -j -f "%Y-%m-%d" "$day" +%Y-%m-%d 2>/dev/null)
 
+      fname_date=$(format_date_filename "$day")
+      patch_file="$OUTPUT_DIR/${fname_date}_${OUTPUT_NAME}.patch"
+
+      if [[ -n "$AUTHOR" ]]; then
+        # Con filtro de autor: concatenar parches solo de commits del autor en ese día
+        # Extraer SHAs largos de los commits de ese día desde COMMITS (campo 3)
+        _day_shas=()
+        while IFS= read -r _line; do
+          [[ -z "$_line" ]] && continue
+          IFS=$'\x1f' read -r _d _short _long _an _ae _sub <<< "$_line"
+          if [[ "$_d" == "$day" ]]; then
+            _day_shas+=("$_long")
+          fi
+        done <<< "$(printf "%b" "$COMMITS")"
+        if [[ ${#_day_shas[@]} -eq 0 ]]; then
+          continue
+        fi
+        : > "$patch_file"
+        for sha in "${_day_shas[@]}"; do
+          # Adjuntar diff solo de ese commit
+          git show -p "$sha" >> "$patch_file"
+          printf "\n" >> "$patch_file"
+        done
+        if [[ ! -s "$patch_file" ]]; then rm -f "$patch_file"; continue; fi
+        echo "  - $patch_file" >&2
+        continue
+      fi
+
+      # Sin filtro de autor: usar diff neto del día (baseline → end)
       # baseline_commit: último commit ANTES de ese día (inicio del día) - sin filtrar por autor
       baseline_commit=$(find_commit_any "$day")
 
@@ -511,7 +564,8 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
 
         # Si baseline es igual a HEAD, obtener el parent del primer commit del día
         if [[ "$baseline_commit" == "$end_commit_hash" ]]; then
-          first_commit_of_day=$(printf "%b" "$COMMITS" | grep "^$day|" | head -n1 | cut -d'|' -f2)
+          # obtener primer commit del día usando el separador SEP
+          first_commit_of_day=$(printf "%b" "$COMMITS" | awk -v RS='\n' -v FS='\x1f' -v d="$day" '$1==d{print $2; exit}')
           if [[ -n "$first_commit_of_day" ]]; then
             parent_commit=$(git rev-parse "${first_commit_of_day}^" 2>/dev/null)
             if [[ -n "$parent_commit" ]]; then
@@ -533,8 +587,6 @@ if [[ $DAILY_SUMMARY -eq 1 ]]; then
         continue
       fi
 
-      fname_date=$(format_date_filename "$day")
-      patch_file="$OUTPUT_DIR/${fname_date}_${OUTPUT_NAME}.patch"
 
       if [[ "$baseline_commit" == __ROOT__:* ]]; then
         root_commit="${baseline_commit#__ROOT__:}"

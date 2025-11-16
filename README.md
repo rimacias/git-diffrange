@@ -30,45 +30,47 @@ A powerful Git diff wrapper that simplifies commit range analysis, daily summari
 
 ## Installation
 
-1. Clone or download the script:
+### Fast install (recommended)
+Use the helper script to install the git alias automatically:
+
 ```bash
-git clone https://github.com/yourusername/git-diffrange.git
-cd git-diffrange
+chmod +x git-alias-install.sh
+./git-alias-install.sh
+# After this, use it as:
+git diffrange -h
 ```
 
-2. Make it executable and add to your PATH:
+What it does:
+- Copies `.git-diffrange` to `~/.git-diffrange`
+- Makes it executable
+- Sets `git config --global alias.diffrange '!~/.git-diffrange'`
+- Prompts before overwriting
+
+### Manual install options
+
 ```bash
 chmod +x .git-diffrange
 
-# Option 1: Symlink to /usr/local/bin (recommended)
-ln -s "$(pwd)/.git-diffrange" /usr/local/bin/git-diffrange
-git diffrange -h
+# Option 1: Symlink to /usr/local/bin (recommended if you prefer PATH over alias)
+ln -sf "$(pwd)/.git-diffrange" /usr/local/bin/git-diffrange
+# Usage: git-diffrange -h (as a standalone command)
 
-# Option 2: Add to PATH via shell configuration
-echo "export PATH=\"\$PATH:$(pwd)\"" >> ~/.zshrc
+# Option 2: Add repo dir to PATH (shell startup)
+echo "export PATH=\"$PATH:$(pwd)\"" >> ~/.zshrc
 source ~/.zshrc
-git-diffrange -h
+# Usage: git-diffrange -h (if you kept the filename)
 
-# Option 3: Copy to a directory already in PATH
+# Option 3: Copy into PATH
 cp .git-diffrange /usr/local/bin/git-diffrange
+# Usage: git-diffrange -h
 
-# Option 4: Create git alias (best for git integration)
-# First, copy or symlink the script to your home directory
+# Option 4: Git alias (manual)
 cp .git-diffrange ~/.git-diffrange
-
-# Then add the alias to your git config:
 git config --global alias.diffrange '!~/.git-diffrange'
-
-# Now you can use it as: git diffrange -h
+# Usage: git diffrange -h
 ```
 
-**Tip:** Option 4 with git alias is recommended because it allows seamless `git diffrange` command integration without modifying your PATH.
-
-**Manual setup:** If you prefer to manually edit `~/.gitconfig`, see `.gitconfig-example` in this repo or add:
-```
-[alias]
-    diffrange = "!~/.git-diffrange"
-```
+Tip: The git alias approach lets you run `git diffrange` directly under the `git` CLI, no PATH changes needed.
 
 ## Quick Start
 
@@ -87,6 +89,15 @@ git diffrange -lw -ds -p -n "sprint-23"
 
 # Custom date range
 git diffrange 2024-01-01 2024-01-31 -ds
+```
+
+### Pager tip (seeing all output)
+Some environments open a pager for long output. Pipe to cat to always see results:
+
+```bash
+git diffrange -cw -ds | cat
+# Or disable pager globally for git logs if you prefer:
+# git config --global core.pager cat
 ```
 
 ## Usage
@@ -160,229 +171,63 @@ git diffrange -cw -ds
 
 ### Custom Formatting
 
-You can customize how each commit line appears using format tokens.
+Use `git diffrange -fh` for full formatter docs and examples.
 
-#### Three Ways to Specify Format
+Three ways to pass a format:
 
-1. **Inline with `-ds`** (short):
 ```bash
+# 1) Short inline
 git diffrange -cw -ds='format{%h %s}'
-```
 
-2. **Inline with `--daily-summary`** (long):
-```bash
+# 2) Long inline
 git diffrange -cw --daily-summary='format{[%ad] %an: %s}'
-```
 
-3. **Dedicated flag** (recommended for complex formats):
-```bash
+# 3) Dedicated flag (best for spaces/special chars)
 git diffrange -cw -ds --ds-format ' • %s (%h) — %an'
 ```
 
-#### Format Tokens
+Tokens: `%h %H %s %an %ae %ad %n`. On zsh/macOS, quote formats with spaces:
 
-| Token | Description | Example |
-|-------|-------------|---------|
-| `%h` | Short commit hash | `e7f6a51` |
-| `%H` | Full commit hash (40 chars) | `e7f6a512abc...` |
-| `%s` | Commit subject (title) | `Fixed navigation bug` |
-| `%an` | Author name | `John Doe` |
-| `%ae` | Author email | `john@example.com` |
-| `%ad` | Commit date | `2024-11-14` |
-| `%n` | Newline (line break) | (creates new line) |
-
-#### Format Examples
-
-**Default format** (if not specified):
 ```bash
---ds-format ' • %s (%h)'
-# Output: • Fixed bug (e7f6a51)
-```
-
-**Minimal - just hashes:**
-```bash
--ds='format{%H%n}'
-# Output: e7f6a512abc123def456...
-```
-
-**Subject with author:**
-```bash
---ds-format '%s (%h) — %an'
-# Output: Fixed bug (e7f6a51) — John Doe
-```
-
-**Multi-line detailed:**
-```bash
---ds-format '%s%n  by %an <%ae>%n  %H%n'
-# Output:
-# Fixed bug
-#   by John Doe <john@example.com>
-#   e7f6a512abc123def456...
-```
-
-**Date-prefixed:**
-```bash
---ds-format '[%ad] %s — %ae'
-# Output: [2024-11-14] Fixed bug — john@example.com
-```
-
-**No indentation (plain subjects):**
-```bash
---ds-format '%s'
-# Output: Fixed bug
-```
-
-### Shell Quoting Tips (zsh/macOS)
-
-**Always quote formats with spaces:**
-```bash
-# ✅ Good
 git diffrange -cw --ds-format '%s (%h)'
 git diffrange -cw -ds='format{%s (%h)}'
-
-# ❌ Bad (won't work correctly)
-git diffrange -cw --ds-format %s (%h)
 ```
 
-**For special characters, use single quotes:**
-```bash
-git diffrange -cw --ds-format ' • %s (%h) — %an'
-```
+## Author filtering behavior
 
-### Daily Summary with Patches
-
-Generate separate patch files for each day:
-
-```bash
-git diffrange -lw -ds -p -n "sprint-23"
-```
-
-This creates:
-- Console output: Daily summary with commit groupings
-- Files in `diff_reports/`:
-  - `10-11-2024_sprint-23.patch`
-  - `11-11-2024_sprint-23.patch`
-  - `12-11-2024_sprint-23.patch`
-  - etc.
-
-Each patch file contains all the diffs for that specific day.
+- Matching is case-insensitive and uses substring search on:
+  - author name/email and committer name/email
+  - Co-authored-by trailers in the commit body
+- Example: `-a cando` matches `sucre-cando-fairmatic`, `kevincando@dev`, etc.
+- The date window is enforced strictly in daily summary results.
 
 ## Advanced Usage Examples
 
-### Weekly Standup Report
-
 ```bash
-# Show your work from last week with clean formatting
-git diffrange -lw -a $(git config user.name) -ds --ds-format '✓ %s'
-```
+# Weekly standup report for your user
+git diffrange -lw -a "$(git config user.name)" -ds --ds-format '✓ %s'
 
-### Release Notes Generation
-
-```bash
-# Get all commits between two tags
+# Between tags, formatted for release notes
 git diffrange v1.0.0 v1.1.0 -ds --ds-format '- %s (%an)'
-```
 
-### Code Review Preparation
-
-```bash
-# Get patches for each day to review separately
+# Per-day patch files for code review
 git diffrange -cw -ds -p -n "code-review"
-```
-
-### Author Comparison
-
-```bash
-# Compare two developers' contributions
-git diffrange -lw -a alice -ds --ds-format '👤 Alice: %s'
-git diffrange -lw -a bob -ds --ds-format '👤 Bob: %s'
-```
-
-### Detailed Commit Audit
-
-```bash
-# Multi-line format with full details
-git diffrange 2024-11-01 2024-11-14 -ds --ds-format '%s%n  Author: %an <%ae>%n  Date: %ad%n  Hash: %H%n'
-```
-
-### Interactive File Review
-
-```bash
-# Browse commits and select specific files to review
-git diffrange -cw -i
 ```
 
 ## Interactive Mode
 
-When using `-i` flag with `fzf` installed:
-
-1. Select the **FROM** commit using fuzzy search
-2. Select the **TO** commit
-3. Optionally select a specific file (or ESC for full diff)
-4. View the resulting diff
-
-**Note:** Interactive mode is incompatible with `-ds` (daily summary).
-
-## Output Examples
-
-### Standard Diff Output
-
-```bash
-git diffrange -cw
-```
-Shows traditional `git diff` output with changes between Monday and now.
-
-### Statistics Only
-
-```bash
-git diffrange -cw --stat
-```
-```
- src/app.js           | 23 ++++++++++++++-------
- src/utils/helper.js  |  5 +++--
- README.md            | 42 ++++++++++++++++++++++++++++++--------
- 3 files changed, 53 insertions(+), 17 deletions(-)
-```
-
-### File Names Only
-
-```bash
-git diffrange -lw --name-only
-```
-```
-src/app.js
-src/utils/helper.js
-README.md
-tests/app.test.js
-```
+When using `-i` with `fzf` installed you can pick FROM/TO commits and an optional file to diff. Note: incompatible with `-ds`.
 
 ## Behavior Details
 
-### Commit Lookup
-- The script finds the **last commit before** the specified date
-- For week ranges, it uses Monday 00:00 as start and Sunday 23:59 (or now) as end
-- Author filtering is case-insensitive and matches both name and email
-
-### Daily Summary Grouping
-- Commits are grouped by date (YYYY-MM-DD)
-- Within each day, commits are listed chronologically (earliest first)
-- Day headers use dd/mm/YYYY format
-- Empty days are not shown
-
-### Patch Generation
-- Patches are saved to `diff_reports/` directory (auto-created)
-- Filename format: `dd-mm-YYYY_<name>.patch`
-- Each patch contains the full diff for that day
-- Empty patches (no changes) are automatically removed
-
-### Safety
-- Uses ASCII separator internally to handle special characters in commit messages
-- Properly handles commits with quotes, newlines, and Unicode characters
-- Unknown format tokens are left unchanged (e.g., `%x` stays as `%x`)
+- Commit lookup uses Monday/Sunday boundaries for week ranges (macOS `date -v`)
+- Day headers use `dd/mm/YYYY`; `%ad` tokens in format lines use `YYYY-MM-DD`
+- Internally uses an ASCII field separator to keep parsing safe
+- Unknown format tokens are left unchanged (e.g., `%x` remains `%x`)
 
 ## Formatter Help
 
-For comprehensive documentation on custom formatting, run:
+Run:
 
 ```bash
 git diffrange -fh
@@ -390,114 +235,4 @@ git diffrange -fh
 git diffrange --formatter-help
 ```
 
-This displays:
-- All supported format tokens (`%h`, `%H`, `%s`, `%an`, `%ae`, `%ad`, `%n`)
-- How to pass custom formats (three methods)
-- Shell quoting best practices for zsh/macOS
-- Multiple real-world examples
-- Edge cases and tips
-- Quick try-it commands
-
-### Quick Formatter Reference
-
-**Available tokens:**
-- `%h` - short hash
-- `%H` - full hash
-- `%s` - subject/title
-- `%an` - author name
-- `%ae` - author email
-- `%ad` - date (YYYY-MM-DD)
-- `%n` - newline
-
-**Three ways to set format:**
-```bash
-# Method 1: Inline short
--ds='format{%h %s}'
-
-# Method 2: Inline long
---daily-summary='format{%h %s}'
-
-# Method 3: Dedicated flag (best for spaces)
---ds-format '%s (%h) — %an'
-```
-
-## Edge Cases and Tips
-
-### Literal Percent Signs
-Any `%` not followed by a known token stays as-is:
-```bash
---ds-format '%s completed 100%% (%h)'
-# Output: Feature X completed 100% (e7f6a51)
-```
-
-### Newline Handling
-Using `%n` at the end creates blank lines between commits:
-```bash
---ds-format '%s (%h)%n'
-# Output:
-# Fixed bug (e7f6a51)
-# 
-# Added feature (a3b4c5d)
-```
-
-### Empty Results
-If no commits match your criteria:
-```
-(Sin commits en el rango)
-```
-
-### Author Matching
-The `-a` flag matches partial names and emails:
-```bash
-# All of these will match "John Doe <john.doe@example.com>":
--a john
--a doe
--a john.doe
--a example.com
-```
-
-## Troubleshooting
-
-### No commits found
-- Check that your date range is correct
-- Verify the author name is spelled correctly
-- Ensure there are commits in that time range: `git log --since="YYYY-MM-DD"`
-
-### fzf not found (interactive mode)
-Install fzf on macOS:
-```bash
-brew install fzf
-```
-
-### Format not working as expected
-- Make sure to quote your format string if it contains spaces
-- Check that you're using supported tokens (`%h`, `%H`, `%s`, `%an`, `%ae`, `%ad`, `%n`)
-- Use `git diffrange -fh` to see the detailed formatter help
-
-### Patches not generated
-- Ensure you're using `-p` flag with `-ds`
-- Check that there are actual changes in the date range
-- Verify write permissions in the current directory
-
-## Getting More Help
-
-```bash
-# Basic help
-git diffrange -h
-
-# Detailed formatter documentation
-git diffrange -fh
-```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
-
-## License
-
-MIT License - See LICENSE file for details
-
-## Credits
-
-Created for streamlined Git workflow management and reporting.
-
+This prints full docs: tokens, quoting, examples, edge cases, and quick try-it commands.
